@@ -1,0 +1,110 @@
+[
+  {
+    "cores": "local[1]",
+    "fraction": 0.25,
+    "rows": 1410,
+    "train_rows": 1166,
+    "train_sec": 13.3,
+    "accuracy": 0.7582,
+    "f1_weighted": 0.7374
+  },
+  {
+    "cores": "local[1]",
+    "fraction": 0.5,
+    "rows": 2768,
+    "train_rows": 2261,
+    "train_sec": 9.6,
+    "accuracy": 0.7199,
+    "f1_weighted": 0.6873
+  },
+  {
+    "cores": "local[1]",
+    "fraction": 0.75,
+    "rows": 4141,
+    "train_rows": 3368,
+    "train_sec": 10.2,
+    "accuracy": 0.7542,
+    "f1_weighted": 0.7235
+  },
+  {
+    "cores": "local[1]",
+    "fraction": 1.0,
+    "rows": 5447,
+    "train_rows": 4402,
+    "train_sec": 10.5,
+    "accuracy": 0.7732,
+    "f1_weighted": 0.7363
+  },
+  {
+    "cores": "local[2]",
+    "fraction": 0.25,
+    "rows": 1378,
+    "train_rows": 1141,
+    "train_sec": 7.5,
+    "accuracy": 0.7342,
+    "f1_weighted": 0.7011
+  },
+  {
+    "cores": "local[2]",
+    "fraction": 0.5,
+    "rows": 2743,
+    "train_rows": 2233,
+    "train_sec": 8.0,
+    "accuracy": 0.7549,
+    "f1_weighted": 0.723
+  },
+  {
+    "cores": "local[2]",
+    "fraction": 0.75,
+    "rows": 4128,
+    "train_rows": 3356,
+    "train_sec": 8.3,
+    "accuracy": 0.7513,
+    "f1_weighted": 0.7123
+  },
+  {
+    "cores": "local[2]",
+    "fraction": 1.0,
+    "rows": 5447,
+    "train_rows": 4416,
+    "train_sec": 8.7,
+    "accuracy": 0.7701,
+    "f1_weighted": 0.7416
+  },
+  {
+    "cores": "local[4]",
+    "fraction": 0.25,
+    "rows": 1371,
+    "train_rows": 1113,
+    "train_sec": 7.2,
+    "accuracy": 0.7403,
+    "f1_weighted": 0.7162
+  },
+  {
+    "cores": "local[4]",
+    "fraction": 0.5,
+    "rows": 2747,
+    "train_rows": 2229,
+    "train_sec": 7.5,
+    "accuracy": 0.7857,
+    "f1_weighted": 0.766
+  },
+  {
+    "cores": "local[4]",
+    "fraction": 0.75,
+    "rows": 4128,
+    "train_rows": 3348,
+    "train_sec": 7.8,
+    "accuracy": 0.759,
+    "f1_weighted": 0.728
+  },
+  {
+    "cores": "local[4]",
+    "fraction": 1.0,
+    "rows": 5447,
+    "train_rows": 4404,
+    "train_sec": 8.0,
+    "accuracy": 0.7411,
+    "f1_weighted": 0.7096
+  }
+]

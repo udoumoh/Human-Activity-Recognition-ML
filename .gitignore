@@ -1,0 +1,45 @@
+# Claude / AI session data
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# Raw dataset (1.6GB) — download from UCI repository
+PAMAP2_Dataset/
+
+# Generated data / model artifacts
+data/pamap2_clean.parquet/
+data/pamap2_features.parquet/
+data/best_model/
+data_raw/
+data_parquet/
+
+# Spark internals
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+
+# JVM crash logs
+hs_err_pid*.log
+replay_pid*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Legacy / temp files
+Untitled.ipynb
+results/
