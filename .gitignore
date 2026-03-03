@@ -23,6 +23,9 @@ PAMAP2_Dataset/
 data/pamap2_clean.parquet/
 data/pamap2_features.parquet/
 data/best_model/
+data/gold/
+data/*.json
+data/*.csv
 data_raw/
 data_parquet/
 

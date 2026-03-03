@@ -1,0 +1,23 @@
+name: bigdata-har
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - openjdk=17
+  - pyspark=3.5.0
+  - pytorch>=2.2.0
+  - torchvision
+  - pytorch-cuda=12.1      # remove this line if no NVIDIA GPU
+  - scikit-learn>=1.4.0
+  - pandas>=2.1.0
+  - numpy>=1.26.0
+  - matplotlib>=3.8.0
+  - seaborn>=0.13.0
+  - pyarrow>=14.0.0
+  - scipy>=1.12.0
+  - pytest>=8.0.0
+  - pip:
+      - findspark
