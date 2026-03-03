@@ -1,10 +1,8 @@
 """
 Gold Layer — MLlib Model Training (Distributed).
 
-This script trains four classification models on the Gold feature dataset
-using PySpark MLlib's Pipeline and CrossValidator APIs. All training,
-cross-validation, and hyperparameter tuning is distributed across
-Spark executors.
+Trains four classification models on the Gold feature dataset using PySpark
+MLlib's Pipeline and CrossValidator APIs.
 
 Models Trained
 --------------
@@ -16,19 +14,8 @@ Models Trained
 Each model is wrapped in a Pipeline:
     StringIndexer -> VectorAssembler -> StandardScaler -> Classifier
 
-CrossValidator performs 3-fold CV with F1 evaluation to select the
-best hyperparameters. The best overall model is saved as a
-PipelineModel for downstream evaluation.
-
-Distributed Training Notes
---------------------------
-- CrossValidator distributes fold evaluation: each fold trains on a
-  different data split in parallel (controlled by `parallelism`).
-- VectorAssembler and StandardScaler run as distributed transformations
-  inside the Pipeline, not as driver-side operations.
-- The Pipeline API ensures that preprocessing (indexing, scaling) is
-  fitted on training data only and applied consistently to test data,
-  preventing data leakage across CV folds.
+CrossValidator performs 3-fold CV with F1 evaluation. The best overall
+model is saved as a PipelineModel for downstream evaluation.
 
 Usage
 -----
@@ -66,7 +53,6 @@ from pyspark.ml.classification import (
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 
-# ── Project imports ──────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config.settings import (
     GOLD_FEATURES_OUTPUT, GOLD_MODEL_OUTPUT, GOLD_RESULTS_OUTPUT,
@@ -74,7 +60,6 @@ from config.settings import (
     TRAIN_TEST_SPLIT, RANDOM_SEED, CV_FOLDS, META_COLS,
 )
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [GOLD-TRAIN] %(message)s",
@@ -90,7 +75,6 @@ def run():
     log.info("GOLD LAYER — MLlib Model Training")
     log.info("=" * 60)
 
-    # ── 1. Initialise Spark ──────────────────────────────────
     spark = (
         SparkSession.builder
         .appName("PAMAP2_Gold_ModelTraining")
@@ -103,12 +87,8 @@ def run():
     spark.sparkContext.setLogLevel("WARN")
     log.info(f"Spark version: {spark.version}")
 
-    # ── 1b. Configure checkpoint directory ───────────────────
-    # Setting a checkpoint directory enables Spark MLlib to
-    # periodically write intermediate model state during iterative
-    # training (e.g., MLP gradient descent, tree ensemble building).
-    # This prevents job failure on long runs and provides recovery
-    # points if a task is lost due to executor failure.
+    # Checkpoint directory enables MLlib to recover from executor failure
+    # during long iterative training (MLP gradient descent, tree building).
     checkpoint_dir = os.path.join(
         os.path.dirname(GOLD_FEATURES_OUTPUT), "checkpoints"
     )
@@ -116,12 +96,10 @@ def run():
     spark.sparkContext.setCheckpointDir(checkpoint_dir)
     log.info(f"Checkpoint directory: {checkpoint_dir}")
 
-    # ── 2. Load Gold features ────────────────────────────────
     log.info(f"Reading Gold features from: {GOLD_FEATURES_OUTPUT}")
     df = spark.read.parquet(GOLD_FEATURES_OUTPUT)
     log.info(f"Loaded {df.count():,} rows x {len(df.columns)} columns")
 
-    # Identify feature columns
     feature_cols = sorted([
         c for c in df.columns
         if c not in META_COLS
@@ -129,19 +107,17 @@ def run():
     ])
     log.info(f"Feature columns: {len(feature_cols)}")
 
-    # Replace NaN with 0 (stddev of constant windows = NaN)
+    # stddev of constant-value windows produces NaN; replace with 0
     for c in feature_cols:
         df = df.withColumn(c, when(isnan(col(c)), 0.0).otherwise(col(c)))
     df_clean = df.na.drop(subset=feature_cols)
     log.info(f"After NaN-fix: {df_clean.count():,} rows")
 
-    # ── 3. Train/test split ──────────────────────────────────
     train_df, test_df = df_clean.randomSplit(TRAIN_TEST_SPLIT, seed=RANDOM_SEED)
     train_df.cache()
     test_df.cache()
     log.info(f"Train: {train_df.count():,}  Test: {test_df.count():,}")
 
-    # ── 4. Shared pipeline stages ────────────────────────────
     label_indexer = StringIndexer(
         inputCol="activity_id", outputCol="label"
     ).setHandleInvalid("keep")
@@ -187,7 +163,6 @@ def run():
         log.info(f"  Eval time   : {elapsed:.1f}s")
         log.info(f"{'=' * 56}")
 
-    # ── 5a. Logistic Regression ──────────────────────────────
     log.info("Training: Logistic Regression")
     lr = LogisticRegression(
         featuresCol="features", labelCol="label",
@@ -205,7 +180,6 @@ def run():
     log.info(f"LR training: {time.time() - t0:.1f}s")
     evaluate_model("Logistic Regression", lr_model, test_df)
 
-    # ── 5b. Random Forest ────────────────────────────────────
     log.info("Training: Random Forest")
     rf = RandomForestClassifier(
         featuresCol="features", labelCol="label", seed=RANDOM_SEED,
@@ -225,7 +199,6 @@ def run():
     log.info(f"RF training: {time.time() - t0:.1f}s")
     evaluate_model("Random Forest", rf_model, test_df)
 
-    # ── 5c. Multilayer Perceptron ────────────────────────────
     log.info("Training: Multilayer Perceptron")
     num_features = len(feature_cols)
     num_classes = train_df.select("activity_id").distinct().count()
@@ -247,7 +220,6 @@ def run():
     log.info(f"MLP training: {time.time() - t0:.1f}s")
     evaluate_model("Multilayer Perceptron", mlp_model, test_df)
 
-    # ── 5d. Linear SVM (OneVsRest) ───────────────────────────
     log.info("Training: Linear SVM (OneVsRest)")
     lsvc = LinearSVC(
         featuresCol="features", labelCol="label", maxIter=50,
@@ -267,7 +239,6 @@ def run():
     log.info(f"SVM training: {time.time() - t0:.1f}s")
     evaluate_model("Linear SVM (OVR)", svm_model, test_df)
 
-    # ── 6. Summary ───────────────────────────────────────────
     log.info("=" * 64)
     log.info("  MODEL COMPARISON")
     log.info("=" * 64)
@@ -277,14 +248,12 @@ def run():
     best = max(results, key=lambda r: r["f1_weighted"])
     log.info(f"Best: {best['model']} (F1={best['f1_weighted']})")
 
-    # ── 7. Save results ──────────────────────────────────────
     os.makedirs(os.path.dirname(GOLD_RESULTS_OUTPUT), exist_ok=True)
 
     with open(GOLD_RESULTS_OUTPUT, "w") as f:
         json.dump(results, f, indent=2)
     log.info(f"Results saved to {GOLD_RESULTS_OUTPUT}")
 
-    # Save best model
     best_models = {
         "Logistic Regression": lr_model,
         "Random Forest": rf_model,

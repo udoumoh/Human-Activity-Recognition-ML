@@ -17,7 +17,6 @@ import time, itertools, gc, json, csv, sys, os
 os.environ["PYTHONUNBUFFERED"] = "1"
 sys.stdout.reconfigure(line_buffering=True)
 
-# ── Experiment grid ──────────────────────────────────────────
 CORE_CONFIGS = ["local[1]", "local[2]", "local[4]"]
 SAMPLE_FRACS = [0.25, 0.50, 0.75, 1.0]
 CV_FOLDS = 3
@@ -38,7 +37,6 @@ for cores in CORE_CONFIGS:
         print(f"  {tag}")
         print(f"{'-' * 60}")
 
-        # ── 1. Fresh SparkSession ────────────────────────────
         active = SparkSession.getActiveSession()
         if active is not None:
             active.stop()
@@ -58,7 +56,6 @@ for cores in CORE_CONFIGS:
         )
         spark_bench.sparkContext.setLogLevel("ERROR")
 
-        # ── 2. Load & sample ─────────────────────────────────
         df_all = spark_bench.read.parquet(INPUT_PATH)
 
         META = {"subject_id", "activity_id"}
@@ -68,7 +65,7 @@ for cores in CORE_CONFIGS:
             and isinstance(df_all.schema[c].dataType, DoubleType)
         ])
 
-        # Replace NaN with 0
+        # stddev of constant-value windows produces NaN; replace with 0
         for c in feat_cols:
             df_all = df_all.withColumn(c, when(isnan(col(c)), 0.0).otherwise(col(c)))
         df_all = df_all.na.drop(subset=feat_cols)
@@ -88,7 +85,6 @@ for cores in CORE_CONFIGS:
 
         print(f"  Rows: {n_rows:,}  (train {train_count:,} / test {test_count:,})")
 
-        # ── 3. Pipeline ──────────────────────────────────────
         idx = StringIndexer(inputCol="activity_id",
                             outputCol="label").setHandleInvalid("keep")
         asm = VectorAssembler(inputCols=feat_cols,
@@ -118,12 +114,10 @@ for cores in CORE_CONFIGS:
             seed=SEED,
         )
 
-        # ── 4. Train + time ──────────────────────────────────
         t_start = time.time()
         cv_model = cv.fit(train_df)
         train_time = time.time() - t_start
 
-        # ── 5. Evaluate ──────────────────────────────────────
         preds = cv_model.transform(test_df)
         acc = MulticlassClassificationEvaluator(
             labelCol="label", metricName="accuracy"
@@ -146,7 +140,6 @@ for cores in CORE_CONFIGS:
         print(f"  Accuracy   : {acc:.4f}")
         print(f"  F1         : {f1:.4f}")
 
-        # ── 6. Cleanup ───────────────────────────────────────
         train_df.unpersist()
         test_df.unpersist()
         spark_bench.stop()
@@ -157,7 +150,6 @@ print(f"\n{'=' * 60}")
 print(f"  All {len(bench_results)} benchmark runs complete.")
 print(f"{'=' * 60}")
 
-# ── Results summary ──────────────────────────────────────────
 print("\n" + "=" * 80)
 print("  SCALABILITY BENCHMARK -- Random Forest (20 trees, depth 5, 3-fold CV)")
 print("=" * 80)
@@ -166,7 +158,6 @@ print("-" * 70)
 for r in sorted(bench_results, key=lambda x: (x["cores"], x["fraction"])):
     print(f"  {r['cores']:<12} {r['fraction']:<8} {r['rows']:<8} {r['train_sec']:<12} {r['accuracy']:<10} {r['f1_weighted']:<10}")
 
-# ── Speedup table ────────────────────────────────────────────
 print("\n" + "=" * 80)
 print("  SPEEDUP vs local[1]  (time_local1 / time_localN)")
 print("=" * 80)
@@ -181,7 +172,6 @@ for r in sorted(bench_results, key=lambda x: (x["fraction"], x["cores"])):
     speedup = round(base_t / r["train_sec"], 2) if r["train_sec"] > 0 else 0.0
     print(f"  {r['cores']:<12} {r['fraction']:<8} {r['train_sec']:<12} {speedup:<10}")
 
-# ── Save results ─────────────────────────────────────────────
 OUTPUT_DIR = r"C:/Users/johnu/Desktop/BigDataProject/data"
 
 out_path = f"{OUTPUT_DIR}/scalability_results.json"

@@ -1,39 +1,22 @@
 """
 Gold Layer — 1-D CNN Training with CPU/GPU Benchmarking (Hybrid Pipeline, Stage 2/2).
 
-PURPOSE
--------
 Trains a 1-D Convolutional Neural Network (HAR_CNN) on the raw-sequence tensor
 produced by gold/generate_sequence_tensor.py, and benchmarks identical training
 runs on CPU and GPU (CUDA, RTX 4060) to quantify hardware acceleration benefit.
 
-This script is architecturally integrated into the modelling pipeline — it is
-not a standalone benchmark.  Results are saved alongside the MLlib metrics so
-that gold/model_comparison.py can produce a single unified comparison table.
-
-CNN ARCHITECTURE
+CNN Architecture
 ----------------
 Input : (batch, C=N_channels, L=500)   ← channels-first for Conv1d
 
     Conv1d(C→64,  k=7, pad=3) → BatchNorm1d → ReLU      [stage 1]
     Conv1d(64→128, k=5, pad=2) → BatchNorm1d → ReLU      [stage 2]
     Conv1d(128→256, k=3, pad=1) → BatchNorm1d → ReLU     [stage 3]
-    AdaptiveAvgPool1d(1)  ← Global Average Pooling        [GAP]
+    AdaptiveAvgPool1d(1)  ← Global Average Pooling
     Dropout(0.3)
-    Linear(256, N_classes)                                 [classifier]
+    Linear(256, N_classes)
 
-Computational complexity per forward pass (dominant term — Layer 1):
-    O(N × L × C_in × C_out × K)
-    = O(N × 500 × 40 × 64 × 7)  ≈  8.96 × 10^9 MACs / epoch (full batch)
-
-GPU ACCELERATION
-----------------
-All Conv1d operations parallelise across the L=500 time dimension and the
-batch dimension simultaneously on CUDA cores.  The RTX 4060 provides 3072
-CUDA cores at 2.46 GHz, enabling sub-second per-epoch throughput for this
-dataset size — expected 10-20× speedup over single-threaded CPU inference.
-
-TRAINING CONFIGURATION
+Training Configuration
 ----------------------
 - CrossEntropyLoss  (multiclass, 18 classes)
 - Adam (lr=CNN_LR, default betas)
@@ -41,7 +24,7 @@ TRAINING CONFIGURATION
 - EarlyStopping (patience=CNN_PATIENCE epochs on val loss)
 - 80/20 stratified train/test split (seed=RANDOM_SEED — matches MLlib split)
 
-OUTPUTS
+Outputs
 -------
     results/cnn_metrics.csv       — per-device accuracy / F1 / epoch count
     results/cnn_benchmark.csv     — timing, GPU memory, speedup ratio
@@ -77,7 +60,6 @@ from sklearn.metrics import (
     accuracy_score, f1_score, confusion_matrix, classification_report
 )
 
-# ── Project imports ──────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -88,7 +70,6 @@ from config.settings import (
     TRAIN_TEST_SPLIT, RANDOM_SEED,
 )
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [CNN-TRAIN] %(message)s",
@@ -96,10 +77,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-
-# ═════════════════════════════════════════════════════════════
-# 1. Model definition
-# ═════════════════════════════════════════════════════════════
 
 class HAR_CNN(nn.Module):
     """
@@ -112,7 +89,7 @@ class HAR_CNN(nn.Module):
       - Stage 3 (k=3) : 750 ms receptive field — activity-level patterns
 
     Global Average Pooling replaces flattening, making the model length-agnostic
-    and dramatically reducing the parameter count vs. a fully-connected head.
+    and reducing parameter count vs. a fully-connected head.
 
     Parameters
     ----------
@@ -155,10 +132,6 @@ class HAR_CNN(nn.Module):
         x = self.gap(x).squeeze(-1)   # (batch, 256)
         return self.classifier(x)     # (batch, n_classes) — raw logits
 
-
-# ═════════════════════════════════════════════════════════════
-# 2. Training utilities
-# ═════════════════════════════════════════════════════════════
 
 class EarlyStopping:
     """
@@ -211,10 +184,6 @@ def evaluate(model, X_te_t, y_te_t, criterion, device):
     return loss, preds
 
 
-# ═════════════════════════════════════════════════════════════
-# 3. Data loading and preprocessing
-# ═════════════════════════════════════════════════════════════
-
 def load_and_preprocess():
     """
     Load sequence tensor and labels from disk.
@@ -234,18 +203,15 @@ def load_and_preprocess():
     log.info(f"Tensor shape: {X.shape}  |  Labels: {y.shape}  "
              f"|  Classes: {len(np.unique(y))}")
 
-    # ── Channel-wise z-score normalisation ───────────────────
-    # Normalise across (N, L) independently for each channel C
-    # so each sensor has zero mean and unit variance in the training set.
-    # This compensates for scale differences between accelerometers,
-    # gyroscopes, magnetometers, and temperature.
+    # Normalise each channel independently across (N, L) so scale differences
+    # between accelerometers, gyroscopes, magnetometers, and temperature
+    # do not bias early convolutional filters.
     channel_mean = X.mean(axis=(0, 1), keepdims=True)   # (1, 1, C)
     channel_std  = X.std(axis=(0, 1), keepdims=True)    # (1, 1, C)
     channel_std  = np.where(channel_std < 1e-8, 1.0, channel_std)  # avoid /0
     X = (X - channel_mean) / channel_std
     log.info("Channel-wise z-score normalisation applied.")
 
-    # ── Label encoding ───────────────────────────────────────
     le = LabelEncoder()
     y_encoded = le.fit_transform(y).astype(np.int64)
     n_classes  = len(le.classes_)
@@ -260,9 +226,9 @@ def split_data(X, y):
     """
     Stratified 80/20 train/test split.
 
-    Uses the same RANDOM_SEED as the MLlib pipeline to maximise split
-    comparability.  Stratification preserves class proportions in both
-    sets, which is more robust than MLlib's non-stratified randomSplit.
+    Uses the same RANDOM_SEED as the MLlib pipeline for split comparability.
+    Stratification preserves class proportions in both sets, which is more
+    robust than MLlib's non-stratified randomSplit.
     """
     test_frac = TRAIN_TEST_SPLIT[1]
     X_train, X_test, y_train, y_test = train_test_split(
@@ -275,10 +241,6 @@ def split_data(X, y):
              f"(stratified, seed={RANDOM_SEED})")
     return X_train, X_test, y_train, y_test
 
-
-# ═════════════════════════════════════════════════════════════
-# 4. Per-device benchmark
-# ═════════════════════════════════════════════════════════════
 
 def benchmark_device(
     device_str: str,
@@ -322,7 +284,7 @@ def benchmark_device(
 
     torch.manual_seed(RANDOM_SEED)
 
-    # ── Build device tensors (transpose: (N,L,C) → (N,C,L)) ─
+    # Transpose: numpy (N, L, C) → PyTorch (N, C, L) for Conv1d
     X_tr_t = torch.tensor(
         X_train.transpose(0, 2, 1), dtype=torch.float32
     ).to(device)
@@ -332,7 +294,6 @@ def benchmark_device(
     ).to(device)
     y_te_t = torch.tensor(y_test, dtype=torch.long).to(device)
 
-    # ── Model, optimiser, loss ───────────────────────────────
     model     = HAR_CNN(n_channels=n_channels, n_classes=n_classes,
                         dropout=CNN_DROPOUT).to(device)
     criterion = nn.CrossEntropyLoss()
@@ -342,7 +303,6 @@ def benchmark_device(
     )
     stopper = EarlyStopping(patience=CNN_PATIENCE)
 
-    # ── DataLoader ───────────────────────────────────────────
     train_ds = TensorDataset(X_tr_t, y_tr_t)
     loader = DataLoader(
         train_ds, batch_size=CNN_BATCH_SIZE, shuffle=True,
@@ -363,10 +323,8 @@ def benchmark_device(
             torch.cuda.synchronize()
         ep_start = time.time()
 
-        # Train one epoch
         train_loss = train_epoch(model, loader, criterion, optimizer, device)
 
-        # Validate
         val_loss, preds = evaluate(model, X_te_t, y_te_t, criterion, device)
         val_acc = accuracy_score(y_test, preds)
 
@@ -384,7 +342,7 @@ def benchmark_device(
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            # Save state on CPU to avoid GPU memory accumulation
+            # Save state on CPU to avoid accumulating GPU memory across epochs
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         if (epoch + 1) % 10 == 0 or stopper.should_stop:
@@ -400,7 +358,6 @@ def benchmark_device(
 
     total_time = time.time() - t_total
 
-    # ── Final evaluation with best weights ───────────────────
     if best_state is not None:
         model.load_state_dict(best_state)
     model.eval()
@@ -436,10 +393,6 @@ def benchmark_device(
         "history":        history,
     }
 
-
-# ═════════════════════════════════════════════════════════════
-# 5. Visualisation
-# ═════════════════════════════════════════════════════════════
 
 def plot_learning_curves(history: dict, device_label: str,
                          output_dir: str) -> str:
@@ -491,15 +444,10 @@ def plot_learning_curves(history: dict, device_label: str,
     return fname
 
 
-# ═════════════════════════════════════════════════════════════
-# 6. Save results
-# ═════════════════════════════════════════════════════════════
-
 def save_results(all_results: list, output_dir: str) -> None:
     """Write per-device metrics to cnn_metrics.csv and cnn_benchmark.csv."""
     os.makedirs(output_dir, exist_ok=True)
 
-    # cnn_metrics.csv — core accuracy/F1 for comparison table
     metrics_rows = []
     for r in all_results:
         metrics_rows.append({
@@ -516,7 +464,6 @@ def save_results(all_results: list, output_dir: str) -> None:
     metrics_df.to_csv(CNN_METRICS_CSV, index=False)
     log.info(f"Saved {CNN_METRICS_CSV}")
 
-    # cnn_benchmark.csv — timing + GPU memory for hardware section
     cpu_res = next((r for r in all_results if r["device"] == "cpu"), None)
     gpu_res = next((r for r in all_results if r["device"] == "cuda"), None)
 
@@ -550,7 +497,6 @@ def save_model_weights(result: dict, device_str: str, n_channels: int,
     out_dir = os.path.join(PROJECT_ROOT, "data", "gold")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"cnn_best_{device_str}.pt")
-    # Rebuild model to get state_dict keys, then save history-free checkpoint
     model = HAR_CNN(n_channels=n_channels, n_classes=n_classes, dropout=CNN_DROPOUT)
     torch.save({
         "accuracy":    result["accuracy"],
@@ -560,17 +506,12 @@ def save_model_weights(result: dict, device_str: str, n_channels: int,
     log.info(f"Saved model checkpoint → {path}")
 
 
-# ═════════════════════════════════════════════════════════════
-# 7. Main orchestrator
-# ═════════════════════════════════════════════════════════════
-
 def run():
     """Load sequence tensor → train CNN on CPU + GPU → save all outputs."""
     log.info("=" * 65)
     log.info("HAR 1-D CNN TRAINING  (CPU + GPU Benchmark)")
     log.info("=" * 65)
 
-    # ── Load data ────────────────────────────────────────────
     X, y, le, n_classes, class_labels = load_and_preprocess()
     X_train, X_test, y_train, y_test   = split_data(X, y)
     n_channels = X_train.shape[2]
@@ -581,10 +522,9 @@ def run():
     all_results = []
     os.makedirs(LEARNING_CURVES_DIR, exist_ok=True)
 
-    # ── Benchmark 1: CPU ─────────────────────────────────────
-    log.info("\n" + "─" * 50)
+    log.info("\n" + "-" * 50)
     log.info("[1/2] Benchmarking on CPU")
-    log.info("─" * 50)
+    log.info("-" * 50)
     cpu_result = benchmark_device(
         "cpu", X_train, y_train, X_test, y_test, n_classes, class_labels
     )
@@ -592,14 +532,13 @@ def run():
         all_results.append(cpu_result)
         plot_learning_curves(cpu_result["history"], "cpu", LEARNING_CURVES_DIR)
 
-    # ── Benchmark 2: GPU (CUDA) ──────────────────────────────
-    log.info("\n" + "─" * 50)
+    log.info("\n" + "-" * 50)
     log.info("[2/2] Benchmarking on GPU (CUDA)")
     if not torch.cuda.is_available():
         log.warning("  torch.cuda.is_available() = False")
         log.warning("  Install CUDA-enabled PyTorch to run GPU benchmark.")
         log.warning("  GPU benchmark skipped — CPU results only.")
-    log.info("─" * 50)
+    log.info("-" * 50)
 
     gpu_result = benchmark_device(
         "cuda", X_train, y_train, X_test, y_test, n_classes, class_labels
@@ -608,7 +547,6 @@ def run():
         all_results.append(gpu_result)
         plot_learning_curves(gpu_result["history"], "cuda", LEARNING_CURVES_DIR)
 
-    # ── Save results ─────────────────────────────────────────
     if not all_results:
         log.error("No results to save — all benchmarks failed.")
         return
@@ -616,7 +554,6 @@ def run():
     results_dir = os.path.dirname(CNN_METRICS_CSV)
     save_results(all_results, results_dir)
 
-    # ── Summary ──────────────────────────────────────────────
     log.info("\n" + "=" * 65)
     log.info("CNN BENCHMARK SUMMARY")
     log.info("=" * 65)

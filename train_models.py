@@ -21,7 +21,6 @@ from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 
 import time, json
 
-# ── Spark session ────────────────────────────────────────────
 spark = (
     SparkSession.builder
     .appName("PAMAP2_ModelTraining")
@@ -34,7 +33,6 @@ spark = (
 spark.sparkContext.setLogLevel("WARN")
 print(f"Spark version : {spark.version}")
 
-# ── Load features ────────────────────────────────────────────
 INPUT_PATH = r"C:/Users/johnu/Desktop/BigDataProject/data/pamap2_features.parquet"
 df = spark.read.parquet(INPUT_PATH)
 print(f"Loaded {df.count():,} rows x {len(df.columns)} columns")
@@ -46,7 +44,7 @@ feature_cols = sorted([
 ])
 print(f"Feature columns: {len(feature_cols)}")
 
-# Replace NaN with 0
+# stddev of constant-value windows produces NaN; replace with 0
 for c in feature_cols:
     df = df.withColumn(c, when(isnan(col(c)), 0.0).otherwise(col(c)))
 df_clean = df.na.drop(subset=feature_cols)
@@ -57,7 +55,6 @@ train_df.cache()
 test_df.cache()
 print(f"Train: {train_df.count():,}  Test: {test_df.count():,}")
 
-# ── Shared stages ────────────────────────────────────────────
 label_indexer = StringIndexer(inputCol="activity_id", outputCol="label").setHandleInvalid("keep")
 assembler = VectorAssembler(inputCols=feature_cols, outputCol="features_raw", handleInvalid="keep")
 scaler = StandardScaler(inputCol="features_raw", outputCol="features", withMean=True, withStd=True)
@@ -80,7 +77,6 @@ def evaluate_model(name, cv_model, test_data):
     print(f"  Eval time   : {elapsed:.1f}s\n{'='*56}")
     return preds
 
-# ── 1. Logistic Regression ───────────────────────────────────
 print("\n>>> Logistic Regression")
 lr = LogisticRegression(featuresCol="features", labelCol="label", family="multinomial", maxIter=100, elasticNetParam=0.0)
 lr_pipe = Pipeline(stages=[label_indexer, assembler, scaler, lr])
@@ -91,7 +87,6 @@ lr_model = lr_cv.fit(train_df)
 print(f"LR training: {time.time()-t0:.1f}s")
 evaluate_model("Logistic Regression", lr_model, test_df)
 
-# ── 2. Random Forest ────────────────────────────────────────
 print("\n>>> Random Forest")
 rf = RandomForestClassifier(featuresCol="features", labelCol="label", seed=42)
 rf_pipe = Pipeline(stages=[label_indexer, assembler, scaler, rf])
@@ -102,7 +97,6 @@ rf_model = rf_cv.fit(train_df)
 print(f"RF training: {time.time()-t0:.1f}s")
 evaluate_model("Random Forest", rf_model, test_df)
 
-# ── 3. MLP ──────────────────────────────────────────────────
 print("\n>>> Multilayer Perceptron")
 NUM_FEATURES = len(feature_cols)
 NUM_CLASSES = train_df.select("activity_id").distinct().count()
@@ -116,7 +110,6 @@ mlp_model = mlp_cv.fit(train_df)
 print(f"MLP training: {time.time()-t0:.1f}s")
 evaluate_model("Multilayer Perceptron", mlp_model, test_df)
 
-# ── 4. Linear SVM (OVR) ─────────────────────────────────────
 print("\n>>> Linear SVM (OneVsRest)")
 lsvc = LinearSVC(featuresCol="features", labelCol="label", maxIter=50)
 ovr = OneVsRest(classifier=lsvc, featuresCol="features", labelCol="label")
@@ -128,7 +121,6 @@ svm_model = svm_cv.fit(train_df)
 print(f"SVM training: {time.time()-t0:.1f}s")
 evaluate_model("Linear SVM (OVR)", svm_model, test_df)
 
-# ── Summary ─────────────────────────────────────────────────
 print("\n" + "="*64)
 print("  MODEL COMPARISON")
 print("="*64)
@@ -138,13 +130,11 @@ for r in sorted(results, key=lambda x: x["f1_weighted"], reverse=True):
 best = max(results, key=lambda r: r["f1_weighted"])
 print(f"\nBest: {best['model']} (F1={best['f1_weighted']})")
 
-# ── Save results ────────────────────────────────────────────
 OUTPUT_DIR = r"C:/Users/johnu/Desktop/BigDataProject/data"
 with open(f"{OUTPUT_DIR}/model_results.json", "w") as f:
     json.dump(results, f, indent=2)
 print(f"Results saved to {OUTPUT_DIR}/model_results.json")
 
-# Save best model
 best_models = {"Logistic Regression": lr_model, "Random Forest": rf_model,
                "Multilayer Perceptron": mlp_model, "Linear SVM (OVR)": svm_model}
 best_models[best["model"]].bestModel.write().overwrite().save(f"{OUTPUT_DIR}/best_model")

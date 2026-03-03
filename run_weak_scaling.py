@@ -23,7 +23,7 @@ import time, gc, json, csv, sys, os
 os.environ["PYTHONUNBUFFERED"] = "1"
 sys.stdout.reconfigure(line_buffering=True)
 
-# -- Weak scaling pairs: (cores, fraction) such that frac/cores is constant --
+# Pairs: (cores, fraction) such that frac/cores is constant at 0.25
 WEAK_CONFIGS = [
     ("local[1]", 0.25),
     ("local[2]", 0.50),
@@ -45,7 +45,6 @@ for cores, frac in WEAK_CONFIGS:
     print(f"  {tag}  (data per core = {frac/int(cores.split('[')[1].rstrip(']')):.2f})")
     print(f"{'-' * 60}")
 
-    # -- 1. Fresh SparkSession --
     active = SparkSession.getActiveSession()
     if active is not None:
         active.stop()
@@ -65,7 +64,6 @@ for cores, frac in WEAK_CONFIGS:
     )
     spark_bench.sparkContext.setLogLevel("ERROR")
 
-    # -- 2. Load & sample --
     df_all = spark_bench.read.parquet(INPUT_PATH)
 
     META = {"subject_id", "activity_id"}
@@ -93,7 +91,7 @@ for cores, frac in WEAK_CONFIGS:
 
     print(f"  Rows: {n_rows:,}  (train {train_count:,} / test {test_count:,})")
 
-    # -- 3. Pipeline (same as strong scaling for fair comparison) --
+    # Same pipeline as strong scaling for fair comparison
     idx = StringIndexer(inputCol="activity_id",
                         outputCol="label").setHandleInvalid("keep")
     asm = VectorAssembler(inputCols=feat_cols,
@@ -123,12 +121,10 @@ for cores, frac in WEAK_CONFIGS:
         seed=SEED,
     )
 
-    # -- 4. Train + time --
     t_start = time.time()
     cv_model = cv.fit(train_df)
     train_time = time.time() - t_start
 
-    # -- 5. Evaluate --
     preds = cv_model.transform(test_df)
     acc = MulticlassClassificationEvaluator(
         labelCol="label", metricName="accuracy"
@@ -153,14 +149,12 @@ for cores, frac in WEAK_CONFIGS:
     print(f"  Accuracy   : {acc:.4f}")
     print(f"  F1         : {f1:.4f}")
 
-    # -- 6. Cleanup --
     train_df.unpersist()
     test_df.unpersist()
     spark_bench.stop()
     gc.collect()
     time.sleep(3)
 
-# -- Results summary --
 print(f"\n{'=' * 60}")
 print(f"  All {len(bench_results)} weak scaling runs complete.")
 print(f"{'=' * 60}")
@@ -174,11 +168,10 @@ print("-" * 70)
 for r in bench_results:
     print(f"  {r['cores']:<12} {r['fraction']:<8} {r['rows']:<8} {r['train_sec']:<12} {r['accuracy']:<10} {r['f1_weighted']:<10}")
 
-# -- Weak scaling efficiency --
+# Efficiency = T_base / T_n where T_base is time at 1 core / 25% data
 base_time = bench_results[0]["train_sec"]
 print("\n" + "=" * 80)
 print("  WEAK SCALING EFFICIENCY  (ideal = 1.0)")
-print("  Efficiency = T_base / T_n  where T_base is time at 1 core / 25% data")
 print("=" * 80)
 print(f"  {'Cores':<12} {'Frac':<8} {'Train(s)':<12} {'Efficiency':<12}")
 print("-" * 50)
@@ -186,7 +179,6 @@ for r in bench_results:
     eff = round(base_time / r["train_sec"], 2) if r["train_sec"] > 0 else 0.0
     print(f"  {r['cores']:<12} {r['fraction']:<8} {r['train_sec']:<12} {eff:<12}")
 
-# -- Save results --
 OUTPUT_DIR = r"C:/Users/johnu/Desktop/BigDataProject/results"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

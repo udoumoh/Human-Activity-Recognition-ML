@@ -35,7 +35,7 @@ import sys
 import logging
 import time
 
-# ── Ensure PySpark workers use the same Python interpreter ────
+# Ensure PySpark workers use the same Python interpreter on Windows
 os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
 os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
@@ -65,7 +65,6 @@ from pyspark.ml.classification import (
     LogisticRegression,
 )
 
-# ── Project imports ──────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config.settings import (
     GOLD_FEATURES_OUTPUT, GOLD_MODEL_OUTPUT,
@@ -73,7 +72,6 @@ from config.settings import (
     TRAIN_TEST_SPLIT, RANDOM_SEED, META_COLS,
 )
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [EXT-EVAL] %(message)s",
@@ -81,7 +79,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Activity name map ─────────────────────────────────────────
 ACTIVITY_NAMES = {
     1: "Lying", 2: "Sitting", 3: "Standing", 4: "Walking",
     5: "Running", 6: "Cycling", 7: "Nordic Walking",
@@ -91,10 +88,6 @@ ACTIVITY_NAMES = {
     19: "House Cleaning", 20: "Playing Soccer", 24: "Rope Jumping",
 }
 
-
-# ──────────────────────────────────────────────────────────────
-# Helper: extended scalar metrics
-# ──────────────────────────────────────────────────────────────
 
 def extended_metrics(y_true: np.ndarray, y_pred: np.ndarray,
                      model_name: str) -> dict:
@@ -112,10 +105,6 @@ def extended_metrics(y_true: np.ndarray, y_pred: np.ndarray,
         "mcc":                round(float(matthews_corrcoef(y_true, y_pred)), 4),
     }
 
-
-# ──────────────────────────────────────────────────────────────
-# Helper: ROC curves (One-vs-Rest)
-# ──────────────────────────────────────────────────────────────
 
 def compute_roc_curves(y_true: np.ndarray, y_prob: np.ndarray,
                        class_labels: list) -> pd.DataFrame:
@@ -156,7 +145,7 @@ def compute_roc_curves(y_true: np.ndarray, y_prob: np.ndarray,
                 "auc":       round(float(roc_auc), 4),
             })
 
-    # Macro average — interpolated on common FPR grid
+    # Macro average interpolated on a common FPR grid
     mean_fpr = np.linspace(0, 1, 200)
     mean_tpr = np.zeros_like(mean_fpr)
     for fpr, tpr in zip(fprs_all, tprs_all):
@@ -176,10 +165,6 @@ def compute_roc_curves(y_true: np.ndarray, y_prob: np.ndarray,
     log.info(f"  Macro-averaged AUC: {macro_auc:.4f}")
     return pd.DataFrame(rows)
 
-
-# ──────────────────────────────────────────────────────────────
-# Helper: Bootstrap CI
-# ──────────────────────────────────────────────────────────────
 
 def bootstrap_ci(y_true: np.ndarray, y_pred: np.ndarray,
                  n_boot: int = 1000, alpha: float = 0.05,
@@ -220,10 +205,6 @@ def bootstrap_ci(y_true: np.ndarray, y_pred: np.ndarray,
     return pd.DataFrame(rows)
 
 
-# ──────────────────────────────────────────────────────────────
-# Helper: McNemar's test
-# ──────────────────────────────────────────────────────────────
-
 def mcnemar_test(y_true: np.ndarray,
                  y_pred_a: np.ndarray,
                  y_pred_b: np.ndarray,
@@ -250,7 +231,7 @@ def mcnemar_test(y_true: np.ndarray,
 
     table = np.array([[b00, b01], [b10, b11]])
 
-    # Use chi2 with Yates continuity correction (standard for McNemar)
+    # Yates continuity correction (standard for McNemar's test)
     if (b01 + b10) == 0:
         statistic, p_value = 0.0, 1.0
     else:
@@ -274,10 +255,6 @@ def mcnemar_test(y_true: np.ndarray,
         "significant_at_0.05": decision,
     }])
 
-
-# ──────────────────────────────────────────────────────────────
-# ROC plot helper
-# ──────────────────────────────────────────────────────────────
 
 def plot_roc(roc_df: pd.DataFrame, save_path: str):
     """Plot per-class + macro ROC curves."""
@@ -310,10 +287,6 @@ def plot_roc(roc_df: pd.DataFrame, save_path: str):
     log.info(f"  Saved ROC plot: {save_path}")
 
 
-# ──────────────────────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────────────────────
-
 def run():
     log.info("=" * 60)
     log.info("GOLD LAYER — Extended Evaluation")
@@ -321,7 +294,6 @@ def run():
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # ── 1. Spark session ─────────────────────────────────────
     spark = (
         SparkSession.builder
         .appName("PAMAP2_Extended_Evaluation")
@@ -333,7 +305,6 @@ def run():
     )
     spark.sparkContext.setLogLevel("ERROR")
 
-    # ── 2. Load data ─────────────────────────────────────────
     log.info(f"Loading features from: {GOLD_FEATURES_OUTPUT}")
     df = spark.read.parquet(GOLD_FEATURES_OUTPUT)
 
@@ -355,7 +326,6 @@ def run():
     n_features = len(feature_cols)
     n_classes = train_df.select("activity_id").distinct().count()
 
-    # ── 3. Load best MLP model ───────────────────────────────
     log.info(f"Loading MLP model from: {GOLD_MODEL_OUTPUT}")
     mlp_model = PipelineModel.load(GOLD_MODEL_OUTPUT)
 
@@ -371,12 +341,11 @@ def run():
     y_true     = mlp_pd["label"].astype(int).values
     y_pred_mlp = mlp_pd["prediction"].astype(int).values
 
-    # Probability matrix for ROC (convert DenseVector to numpy)
+    # Convert DenseVector probability columns to numpy matrix for ROC
     y_prob_mlp = np.vstack(
         mlp_pd["probability"].apply(lambda v: np.array(v.toArray())).values
     )
 
-    # ── 4. Train Logistic Regression for McNemar comparison ─
     log.info("Training Logistic Regression for McNemar comparison …")
     label_idx = StringIndexer(
         inputCol="activity_id", outputCol="label"
@@ -400,7 +369,6 @@ def run():
     lr_pd    = lr_preds.select("label", "prediction").toPandas()
     y_pred_lr = lr_pd["prediction"].astype(int).values
 
-    # ── 5. Extended metrics ──────────────────────────────────
     log.info("Computing extended metrics …")
     metric_rows = [
         extended_metrics(y_true, y_pred_mlp, "MLP"),
@@ -413,7 +381,6 @@ def run():
     ext_df.to_csv(ext_csv, index=False)
     log.info(f"  Saved {ext_csv}")
 
-    # ── 6. ROC curves ────────────────────────────────────────
     log.info("Computing ROC curves …")
     roc_df  = compute_roc_curves(y_true, y_prob_mlp, class_labels)
     roc_csv = os.path.join(RESULTS_DIR, "roc_curves.csv")
@@ -423,7 +390,6 @@ def run():
     roc_png = os.path.join(RESULTS_DIR, "roc_curves.png")
     plot_roc(roc_df, roc_png)
 
-    # ── 7. Bootstrap CI ──────────────────────────────────────
     log.info("Bootstrap CI (1 000 resamples) …")
     boot_df  = bootstrap_ci(y_true, y_pred_mlp, n_boot=1000)
     boot_csv = os.path.join(RESULTS_DIR, "bootstrap_ci.csv")
@@ -431,7 +397,6 @@ def run():
     log.info("\n" + boot_df.to_string(index=False))
     log.info(f"  Saved {boot_csv}")
 
-    # ── 8. McNemar's test ────────────────────────────────────
     log.info("McNemar's significance test …")
     mcnemar_df  = mcnemar_test(y_true, y_pred_mlp, y_pred_lr,
                                "MLP", "Logistic Regression")
@@ -439,7 +404,6 @@ def run():
     mcnemar_df.to_csv(sig_csv, index=False)
     log.info(f"  Saved {sig_csv}")
 
-    # ── Cleanup ──────────────────────────────────────────────
     train_df.unpersist()
     test_df.unpersist()
     spark.stop()

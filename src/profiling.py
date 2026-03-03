@@ -1,10 +1,10 @@
 """
 Pipeline Stage Profiling Utilities (Part 5).
 
-Provides lightweight, zero-dependency profiling decorators and context managers
-for classifying the computational bottleneck of each Medallion Architecture stage.
+Lightweight profiling context managers and decorators for classifying the
+computational bottleneck of each Medallion Architecture stage.
 
-BOTTLENECK CLASSIFICATION
+Bottleneck Classification
 --------------------------
 Stage               | Bottleneck Type       | Rationale
 --------------------|----------------------|------------------------------------------
@@ -24,7 +24,7 @@ CNN training (GPU)  | Compute bound (GPU)   | CUDA parallelises Conv1d across ba
                     |                       | dimensions simultaneously; memory transfer
                     |                       | (host→device) is one-time cost at epoch 0.
 
-USAGE
+Usage
 -----
 As a context manager:
 
@@ -57,10 +57,6 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────
-# Bottleneck classification constants
-# ─────────────────────────────────────────────────────────────
-
 class BottleneckType:
     """String constants for bottleneck classification labels."""
     IO              = "I/O bound"
@@ -71,7 +67,6 @@ class BottleneckType:
     COMPUTE_GPU     = "Compute bound (GPU)"
 
 
-# Canonical mapping from pipeline stage name → bottleneck type
 STAGE_BOTTLENECK_MAP = {
     "Bronze ingestion":          BottleneckType.IO,
     "Silver cleaning":           BottleneckType.SHUFFLE,
@@ -82,11 +77,6 @@ STAGE_BOTTLENECK_MAP = {
     "CNN training CPU":          BottleneckType.COMPUTE_CPU,
     "CNN training GPU":          BottleneckType.COMPUTE_GPU,
 }
-
-
-# ─────────────────────────────────────────────────────────────
-# Results accumulator (singleton-style, module-level)
-# ─────────────────────────────────────────────────────────────
 
 _profile_records: list = []
 
@@ -101,10 +91,6 @@ def reset_profile_records() -> None:
     _profile_records.clear()
 
 
-# ─────────────────────────────────────────────────────────────
-# Core logging helper
-# ─────────────────────────────────────────────────────────────
-
 def log_stage_profile(stage_name: str, elapsed_s: float,
                       bottleneck_type: str) -> None:
     """
@@ -113,8 +99,8 @@ def log_stage_profile(stage_name: str, elapsed_s: float,
     Format:
         [PROFILE] <stage_name> | <bottleneck_type> | <elapsed>s
 
-    Also appends to the module-level _profile_records list so that a
-    post-run summary table can be constructed without re-parsing log files.
+    Also appends to the module-level _profile_records list so a post-run
+    summary table can be constructed without re-parsing log files.
     """
     record = {
         "stage":      stage_name,
@@ -126,10 +112,6 @@ def log_stage_profile(stage_name: str, elapsed_s: float,
         f"[PROFILE] {stage_name:<30s} | {bottleneck_type:<28s} | {elapsed_s:>8.2f}s"
     )
 
-
-# ─────────────────────────────────────────────────────────────
-# Context manager
-# ─────────────────────────────────────────────────────────────
 
 @contextmanager
 def StageProfiler(stage_name: str, bottleneck_type: str = "Unknown"):
@@ -154,10 +136,6 @@ def StageProfiler(stage_name: str, bottleneck_type: str = "Unknown"):
     finally:
         log_stage_profile(stage_name, time.time() - t0, resolved)
 
-
-# ─────────────────────────────────────────────────────────────
-# Decorator
-# ─────────────────────────────────────────────────────────────
 
 def profile_stage(stage_name: str, bottleneck_type: str = None):
     """
@@ -187,16 +165,12 @@ def profile_stage(stage_name: str, bottleneck_type: str = None):
     return decorator
 
 
-# ─────────────────────────────────────────────────────────────
-# Spark UI integration
-# ─────────────────────────────────────────────────────────────
-
 def set_spark_job_description(spark, description: str) -> None:
     """
     Set the Spark UI job group description for the next submitted job.
 
-    This labels the job in the Spark Web UI (default: localhost:4040)
-    so that each pipeline stage is identifiable by name in the DAG view.
+    Labels the job in the Spark Web UI (default: localhost:4040) so that
+    each pipeline stage is identifiable by name in the DAG view.
 
     Parameters
     ----------
@@ -206,16 +180,11 @@ def set_spark_job_description(spark, description: str) -> None:
     spark.sparkContext.setJobDescription(description)
 
 
-# ─────────────────────────────────────────────────────────────
-# Summary report
-# ─────────────────────────────────────────────────────────────
-
 def print_profile_summary() -> None:
     """
     Print a formatted summary of all profiled stages to the console.
 
-    Call this at the end of a pipeline run to produce a bottleneck report
-    suitable for inclusion in the academic report (Section 4 / Appendix).
+    Call at the end of a pipeline run to produce a bottleneck report.
     """
     records = get_profile_records()
     if not records:

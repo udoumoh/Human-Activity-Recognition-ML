@@ -1,9 +1,8 @@
 """
 Bronze Layer — Raw Data Schema Definition for PAMAP2.
 
-This module defines the 54-column schema that matches the PAMAP2 dataset
-specification from the UCI Machine Learning Repository. The schema is used
-by the ingestion script to enforce typed parsing during distributed CSV
+Defines the 54-column schema matching the PAMAP2 UCI dataset specification.
+Used by the ingestion script to enforce typed parsing during distributed CSV
 loading via Spark's DataFrame API.
 
 Schema layout (per the PAMAP2 readme):
@@ -17,20 +16,13 @@ Schema layout (per the PAMAP2 readme):
 Each IMU block contains 17 signals:
     temperature, acc_16g (xyz), acc_6g (xyz), gyro (xyz),
     mag (xyz), orientation quaternion (4 values)
-
-Why DataFrame API over RDD for schema enforcement:
-    Spark's DataFrame reader with an explicit StructType schema allows
-    the Catalyst optimizer to push down type casting and null handling
-    into the distributed CSV parser itself, rather than requiring a
-    separate map() pass over an RDD. This reduces serialisation overhead
-    and enables predicate pushdown on typed columns.
 """
 
 from pyspark.sql.types import (
     StructType, StructField, DoubleType, IntegerType,
 )
 
-# IMU sensor suffixes — 17 signals per body location
+# 17 signals per IMU body location
 IMU_SUFFIXES = [
     "temperature",
     "acc_16g_x", "acc_16g_y", "acc_16g_z",
@@ -61,7 +53,6 @@ def build_imu_fields(location: str) -> list:
     ]
 
 
-# ── Complete 54-column schema ────────────────────────────────
 PAMAP2_SCHEMA = StructType(
     [
         StructField("timestamp",   DoubleType(),  False),
@@ -73,7 +64,6 @@ PAMAP2_SCHEMA = StructType(
     + build_imu_fields("ankle")
 )
 
-# Validation
 assert len(PAMAP2_SCHEMA.fields) == 54, (
     f"Expected 54 fields, got {len(PAMAP2_SCHEMA.fields)}"
 )

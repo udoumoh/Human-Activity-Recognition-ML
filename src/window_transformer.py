@@ -1,10 +1,10 @@
 """
 Custom PySpark ML Transformer for sliding-window feature extraction.
 
-This module implements WindowFeatureTransformer, a domain-specific
-Transformer that segments time-series sensor data into fixed-duration
-windows and computes statistical aggregates (mean, std, min, max)
-per window. It integrates directly with PySpark's Pipeline API.
+Implements WindowFeatureTransformer, a domain-specific Transformer that
+segments time-series sensor data into fixed-duration windows and computes
+statistical aggregates (mean, std, min, max) per window. Integrates
+directly with PySpark's Pipeline API.
 
 Usage inside a Pipeline:
     from src.window_transformer import WindowFeatureTransformer
@@ -159,7 +159,6 @@ class WindowFeatureTransformer(
         """
         Transform raw time-series data into windowed feature rows.
 
-        Steps:
         1. Assign each row to a window_id based on timestamp offset
            within each group.
         2. Aggregate per window: mean, std, min, max for each sensor.
@@ -175,12 +174,8 @@ class WindowFeatureTransformer(
         expected_samples = int(win_dur * rate)
         min_samples = int(expected_samples * min_fill)
 
-        # -- Identify numeric sensor columns ----------------------
         sensor_cols = self._identify_sensor_cols(df)
 
-        # -- Step 1: assign window IDs ----------------------------
-        # Compute per-group minimum timestamp, then window_id =
-        # floor((t - t_min) / window_duration)
         seg_window = Window.partitionBy(*grp_cols)
         df_win = (
             df
@@ -192,7 +187,6 @@ class WindowFeatureTransformer(
             .drop("_t0")
         )
 
-        # -- Step 2: build aggregation expressions ----------------
         agg_exprs = [count("*").alias("sample_count")]
         for c in sensor_cols:
             agg_exprs.extend([
@@ -205,10 +199,8 @@ class WindowFeatureTransformer(
         group_keys = list(grp_cols) + ["window_id"]
         df_agg = df_win.groupBy(*group_keys).agg(*agg_exprs)
 
-        # -- Step 3: quality gate ---------------------------------
         df_filtered = df_agg.filter(col("sample_count") >= min_samples)
 
-        # -- Step 4: drop helper columns --------------------------
         df_out = df_filtered.drop("window_id", "sample_count")
 
         return df_out

@@ -34,7 +34,6 @@ import logging
 
 import pandas as pd
 
-# ── Project imports ──────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -51,10 +50,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────
-# Loaders
-# ─────────────────────────────────────────────────────────────
-
 def load_mllib_results() -> list[dict]:
     """
     Load PySpark MLlib 4-model results from data/model_results.json.
@@ -70,8 +65,7 @@ def load_mllib_results() -> list[dict]:
     with open(GOLD_RESULTS_OUTPUT) as f:
         raw = json.load(f)
 
-    # Best overall results from the extended evaluation
-    # (MLP 95.54% on full test set; JSON records 3-fold CV training run values)
+    # Override stored CV values with the best-run extended-evaluation results for MLP
     MLLIB_KNOWN_RESULTS = {
         "Multilayer Perceptron": {"accuracy": 0.9554, "f1_weighted": 0.9522},
     }
@@ -79,7 +73,6 @@ def load_mllib_results() -> list[dict]:
     rows = []
     for entry in raw:
         name = entry["model"]
-        # Use known best-model result for MLP; use JSON for others
         acc  = MLLIB_KNOWN_RESULTS.get(name, {}).get("accuracy",    entry["accuracy"])
         f1w  = MLLIB_KNOWN_RESULTS.get(name, {}).get("f1_weighted", entry["f1_weighted"])
         rows.append({
@@ -87,7 +80,7 @@ def load_mllib_results() -> list[dict]:
             "input_type":     "Statistical (172 features)",
             "hardware":       "CPU (Spark local[4])",
             "accuracy":       acc,
-            "f1_macro":       "N/A",   # not in stored results
+            "f1_macro":       "N/A",
             "f1_weighted":    f1w,
             "training_time_s": "N/A (3-fold CV)",
             "gpu_memory_mb":  "N/A",
@@ -111,7 +104,6 @@ def load_gpu_comparison() -> list[dict]:
     df = pd.read_csv(gpu_csv)
     rows = []
     for _, r in df.iterrows():
-        # Skip rows where accuracy is NaN (e.g., CUDA unavailable run)
         if pd.isna(r.get("accuracy")):
             continue
         rows.append({
@@ -125,7 +117,7 @@ def load_gpu_comparison() -> list[dict]:
             "gpu_memory_mb":  r.get("gpu_mem_peak_mb", "N/A"),
             "source":         "gpu_comparison.py",
         })
-    # Skip Spark MLlib row (already loaded from model_results.json with better metrics)
+    # MLlib row already loaded from model_results.json with better metrics
     rows = [r for r in rows if "PyTorch" in r["model"]]
     log.info(f"Loaded {len(rows)} PyTorch MLP rows from {gpu_csv}")
     return rows
@@ -168,10 +160,6 @@ def load_cnn_results() -> list[dict]:
     return rows
 
 
-# ─────────────────────────────────────────────────────────────
-# Build and save comparison table
-# ─────────────────────────────────────────────────────────────
-
 def build_comparison_table(
     mllib_rows: list,
     gpu_rows:   list,
@@ -191,7 +179,6 @@ def build_comparison_table(
 
     df = pd.DataFrame(all_rows)
 
-    # Canonical column order for report
     col_order = [
         "model", "input_type", "hardware",
         "accuracy", "f1_weighted", "f1_macro",
@@ -217,10 +204,6 @@ def print_table(df: pd.DataFrame) -> None:
         log.info("\n" + df.to_string(index=False))
     log.info("=" * 100)
 
-
-# ─────────────────────────────────────────────────────────────
-# Main orchestrator
-# ─────────────────────────────────────────────────────────────
 
 def run() -> pd.DataFrame:
     """Load all results, build table, save CSV."""

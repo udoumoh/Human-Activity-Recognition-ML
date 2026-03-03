@@ -1,8 +1,7 @@
 """
 Gold Layer — Model Evaluation (Distributed + Local Visualisation).
 
-This script performs in-depth evaluation of the best trained model
-(MLP) on the PAMAP2 test set, generating:
+Evaluates the best trained model (MLP) on the PAMAP2 test set, generating:
 
 1. Overall metrics (accuracy, F1, precision, recall)
 2. Confusion matrix heatmaps (raw counts + normalised)
@@ -10,16 +9,6 @@ This script performs in-depth evaluation of the best trained model
 4. Per-class F1 bar chart
 5. Feature importance via Random Forest surrogate model
 6. Confusion matrix in long format for Tableau
-
-Distributed vs Local
---------------------
-- Model loading, prediction, and Spark-native metrics are computed
-  distributedly using MLlib evaluators.
-- Confusion matrix and per-class metrics use scikit-learn on a small
-  pandas DataFrame (1,031 test predictions) — this is appropriate
-  because the test set fits in driver memory after transformation.
-- Feature importance uses a distributed RF training pass on the full
-  training set (4,400 rows) to extract Gini importances.
 
 Usage
 -----
@@ -60,7 +49,6 @@ from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from sklearn.metrics import confusion_matrix, classification_report
 
-# ── Project imports ──────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config.settings import (
     GOLD_FEATURES_OUTPUT, GOLD_MODEL_OUTPUT,
@@ -68,7 +56,6 @@ from config.settings import (
     TRAIN_TEST_SPLIT, RANDOM_SEED, META_COLS,
 )
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [GOLD-EVAL] %(message)s",
@@ -76,7 +63,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# PAMAP2 activity names
 ACTIVITY_NAMES = {
     1: "Lying", 2: "Sitting", 3: "Standing", 4: "Walking",
     5: "Running", 6: "Cycling", 7: "Nordic Walking",
@@ -98,7 +84,6 @@ def run():
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # ── 1. Initialise Spark ──────────────────────────────────
     spark = (
         SparkSession.builder
         .appName("PAMAP2_Gold_Evaluation")
@@ -109,7 +94,6 @@ def run():
     )
     spark.sparkContext.setLogLevel("ERROR")
 
-    # ── 2. Load data and model ───────────────────────────────
     log.info(f"Loading features from: {GOLD_FEATURES_OUTPUT}")
     df = spark.read.parquet(GOLD_FEATURES_OUTPUT)
 
@@ -132,14 +116,12 @@ def run():
     model = PipelineModel.load(GOLD_MODEL_OUTPUT)
     log.info(f"Pipeline stages: {[type(s).__name__ for s in model.stages]}")
 
-    # Extract label mapping
     si_model = model.stages[0]
     idx_to_activity = {i: int(lbl) for i, lbl in enumerate(si_model.labels)}
     idx_to_name = {i: ACTIVITY_NAMES.get(aid, str(aid))
                    for i, aid in idx_to_activity.items()}
     label_names = [idx_to_name[i] for i in range(len(idx_to_name))]
 
-    # ── 3. Generate predictions (distributed) ────────────────
     predictions = model.transform(test_df)
 
     evaluators = {
@@ -158,7 +140,7 @@ def run():
         val = ev.evaluate(predictions)
         log.info(f"  {name:25s}: {val:.4f}")
 
-    # ── 4. Confusion matrix (local — small test set) ─────────
+    # Confusion matrix computed locally — test set (1,031 rows) fits in driver memory
     pred_pd = predictions.select("label", "prediction").toPandas()
     y_true = pred_pd["label"].astype(int).values
     y_pred = pred_pd["prediction"].astype(int).values
@@ -196,7 +178,6 @@ def run():
     plt.close()
     log.info(f"Saved {cm_path}")
 
-    # ── 5. Per-class classification report ───────────────────
     report_dict = classification_report(
         y_true, y_pred, labels=present_labels,
         target_names=present_names, output_dict=True,
@@ -219,7 +200,6 @@ def run():
     )
     log.info("Saved per_class_metrics.csv")
 
-    # Per-class F1 bar chart
     fig, ax = plt.subplots(figsize=(12, 5))
     colors = ["#e74c3c" if f < 0.7 else "#f39c12" if f < 0.85
               else "#2ecc71" for f in report_df["f1_score"]]
@@ -239,7 +219,6 @@ def run():
     plt.close()
     log.info(f"Saved {f1_path}")
 
-    # ── 6. Feature importance (distributed RF surrogate) ─────
     log.info("Training RF surrogate for feature importance...")
     label_idx = StringIndexer(
         inputCol="activity_id", outputCol="label"
@@ -270,7 +249,6 @@ def run():
     )
     log.info("Saved feature_importance.csv")
 
-    # Top 20 chart
     top20 = feat_imp_df.head(20).iloc[::-1]
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.barh(top20["feature"], top20["importance"], color="steelblue")
@@ -282,7 +260,6 @@ def run():
     plt.close()
     log.info(f"Saved {fi_path}")
 
-    # ── 7. Export confusion matrix for Tableau ───────────────
     cm_rows = []
     for i, true_idx in enumerate(present_labels):
         for j, pred_idx in enumerate(present_labels):

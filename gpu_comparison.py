@@ -1,7 +1,7 @@
 """
 GPU vs CPU vs Distributed ML Comparison — PAMAP2 Human Activity Recognition.
 
-This script provides a three-way performance comparison:
+Three-way performance comparison:
 
   1. PySpark MLlib MLP     — distributed, runs on the JVM Spark engine
   2. PyTorch MLP (CPU)     — single-node, NumPy/PyTorch on the host CPU
@@ -9,8 +9,7 @@ This script provides a three-way performance comparison:
 
 Architecture
 ------------
-The neural-network architecture mirrors the best MLlib config found during
-hyperparameter tuning:
+Neural-network architecture mirrors the best MLlib config from hyperparameter tuning:
     Input (172) → Hidden (64) → Output (18 classes)
     Activation : ReLU (hidden), LogSoftmax (output)
     Loss       : NLLLoss
@@ -41,23 +40,20 @@ import json
 import csv
 import logging
 
-# ── Ensure PySpark workers use the same Python interpreter ────
-# On Windows the bare `python` command may resolve to the
-# Microsoft Store stub instead of the real interpreter.
+# On Windows the bare `python` command may resolve to the Microsoft Store stub
+# instead of the real interpreter — pin explicitly.
 os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
 os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 import numpy as np
 import pandas as pd
 
-# ── Project imports ──────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 from config.settings import (
     GOLD_FEATURES_OUTPUT, RESULTS_DIR,
     TRAIN_TEST_SPLIT, RANDOM_SEED, META_COLS,
 )
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [GPU-CMP] %(message)s",
@@ -66,16 +62,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────
-# 1. Shared Spark session builder
-# ──────────────────────────────────────────────────────────────
-
 def get_spark():
     """
     Return (or create) a single shared SparkSession.
-    Using one session across data loading AND MLlib avoids starting
-    a second JVM, which causes native memory exhaustion on Windows.
-    JVM flags: G1GC + enlarged code cache prevent heap OOM during MLP training.
+
+    One session reused across data loading and MLlib avoids starting a second
+    JVM, which causes native memory exhaustion on Windows.
+    G1GC + enlarged code cache prevent heap OOM during MLP training.
     """
     from pyspark.sql import SparkSession
     return (
@@ -89,10 +82,6 @@ def get_spark():
         .getOrCreate()
     )
 
-
-# ──────────────────────────────────────────────────────────────
-# 2. PyTorch MLP definition
-# ──────────────────────────────────────────────────────────────
 
 def build_mlp(n_features: int, n_classes: int):
     """Return a two-layer MLP: Input→64→n_classes."""
@@ -121,7 +110,6 @@ def train_pytorch(X_train, y_train, X_test, y_test,
 
     device = torch.device(device_name)
 
-    # GPU info (only meaningful for CUDA)
     gpu_name = "N/A"
     compute_cap = "N/A"
     gpu_mem_mb = 0.0
@@ -150,7 +138,6 @@ def train_pytorch(X_train, y_train, X_test, y_test,
     criterion = nn.NLLLoss()
     optimiser = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    # ── Training ────────────────────────────────────────────
     t0 = time.time()
     model.train()
     for epoch in range(100):
@@ -162,7 +149,6 @@ def train_pytorch(X_train, y_train, X_test, y_test,
             optimiser.step()
     train_sec = round(time.time() - t0, 2)
 
-    # ── Inference ───────────────────────────────────────────
     model.eval()
     with torch.no_grad():
         X_te_dev = X_te.to(device)
@@ -188,15 +174,10 @@ def train_pytorch(X_train, y_train, X_test, y_test,
     }
 
 
-# ──────────────────────────────────────────────────────────────
-# 3. PySpark MLlib baseline (reuses shared Spark session)
-# ──────────────────────────────────────────────────────────────
-
 def run_mllib_baseline(spark, train_sdf, test_sdf, n_features, n_classes):
     """
     Run PySpark MLlib MLP with architecture [n_features, 64, n_classes]
     using the shared Spark session and pre-split native Spark DataFrames.
-    Avoids creating a second JVM or converting Python objects to DataFrames.
     """
     from pyspark.ml import Pipeline
     from pyspark.ml.feature import VectorAssembler, StandardScaler, StringIndexer
@@ -250,10 +231,6 @@ def run_mllib_baseline(spark, train_sdf, test_sdf, n_features, n_classes):
     }
 
 
-# ──────────────────────────────────────────────────────────────
-# 4. Main
-# ──────────────────────────────────────────────────────────────
-
 def run():
     log.info("=" * 60)
     log.info("GPU vs CPU vs MLlib Comparison")
@@ -261,7 +238,6 @@ def run():
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # ── Single Spark session (reused for data load + MLlib) ─
     from pyspark.sql.types import DoubleType
     from pyspark.sql.functions import col, isnan, when
     from sklearn.preprocessing import LabelEncoder
@@ -283,10 +259,10 @@ def run():
     n_features = len(feature_cols)
     n_classes  = int(df.select("activity_id").distinct().count())
 
-    # Native Spark split — used by MLlib (no Python↔Spark round-trip)
+    # Native Spark split for MLlib (no Python↔Spark round-trip)
     train_sdf, test_sdf = df.randomSplit(TRAIN_TEST_SPLIT, seed=RANDOM_SEED)
 
-    # NumPy arrays — used by PyTorch
+    # NumPy arrays for PyTorch
     pd_df = df.select(feature_cols + ["activity_id"]).toPandas()
     X     = pd_df[feature_cols].values.astype(np.float32)
     le    = LabelEncoder()
@@ -303,7 +279,6 @@ def run():
 
     results = []
 
-    # ── Run 1: PyTorch CPU ──────────────────────────────────
     log.info("\n[1/3] PyTorch MLP — CPU")
     cpu_result = train_pytorch(
         X_train, y_train, X_test, y_test, n_features, n_classes, "cpu"
@@ -312,7 +287,6 @@ def run():
     log.info(f"  time={cpu_result['train_sec']}s  "
              f"acc={cpu_result['accuracy']}  f1={cpu_result['f1_weighted']}")
 
-    # ── Run 2: PyTorch CUDA ─────────────────────────────────
     import torch
     if torch.cuda.is_available():
         log.info("\n[2/3] PyTorch MLP — CUDA GPU")
@@ -327,7 +301,6 @@ def run():
     else:
         log.warning("[2/3] CUDA not available — skipping GPU run.")
 
-    # ── Run 3: PySpark MLlib ────────────────────────────────
     log.info("\n[3/3] PySpark MLlib MLP — Distributed")
     mllib_result = run_mllib_baseline(
         spark, train_sdf, test_sdf, n_features, n_classes
@@ -338,7 +311,6 @@ def run():
 
     spark.stop()
 
-    # ── Summary table ───────────────────────────────────────
     log.info("\n" + "=" * 60)
     log.info("COMPARISON SUMMARY")
     log.info("=" * 60)
@@ -352,7 +324,6 @@ def run():
             f"{r['f1_weighted']:>8.4f} {r['gpu_mem_peak_mb']:>12.1f}"
         )
 
-    # ── Save results ────────────────────────────────────────
     csv_path  = os.path.join(RESULTS_DIR, "gpu_comparison.csv")
     json_path = os.path.join(RESULTS_DIR, "gpu_comparison.json")
 

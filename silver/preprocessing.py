@@ -1,46 +1,16 @@
 """
 Silver Layer — Data Preprocessing (Distributed).
 
-This script implements the second stage of the Silver layer:
-value-level transformations on the structurally cleaned data
-from cleaning.py. It produces the final Silver-layer output
-ready for Gold-layer feature engineering.
+Value-level transformations on structurally cleaned data from cleaning.py.
 
-Preprocessing Operations (all distributed)
-------------------------------------------
-1. **Heart-rate interpolation**:
-   HR is sampled at ~9 Hz while IMUs run at 100 Hz, so ~91% of
-   HR values are null by design. We apply bounded forward-fill,
-   back-fill, and per-subject mean imputation — all using Spark
-   Window functions that execute across partitions in parallel.
+Operations
+----------
+1. Heart-rate interpolation: HR is sampled at ~9 Hz while IMUs run at 100 Hz,
+   so ~91% of HR values are null by design. Bounded forward-fill (15 rows),
+   back-fill, then per-subject mean imputation via broadcast join.
 
-2. **Min-Max normalisation** (sensor columns to [0, 1]):
-   Global min/max statistics are computed in a single distributed
-   aggregation pass, then applied as column-wise transformations.
-   This ensures all sensor features are on the same scale before
-   downstream feature engineering.
-
-Why DataFrame API over RDD for preprocessing
---------------------------------------------
-- Window functions (forward-fill, back-fill) use Spark's native
-  Tungsten execution engine, operating on binary columnar data
-  without Python serialisation overhead.
-- The Catalyst optimizer merges the normalisation expressions into
-  a single projection stage — all 40 sensor columns are normalised
-  in one pass over the data, not 40 sequential passes.
-- An RDD-based equivalent would require partitionBy + mapPartitions
-  with manual state tracking for forward-fill, which is both slower
-  and harder to maintain.
-
-Persist / Unpersist Strategy
-----------------------------
-- df_clean is NOT cached because each transformation produces a new
-  DataFrame (Spark is lazy — transformations are fused into the
-  execution plan).
-- The final normalised DataFrame is written directly to Parquet
-  without caching, since it is only materialised once.
-- If this script were part of a larger multi-output pipeline,
-  caching before the write would be justified to avoid recomputation.
+2. Min-Max normalisation: all sensor columns scaled to [0, 1] using global
+   min/max computed in a single distributed aggregation pass.
 
 Usage
 -----
@@ -70,14 +40,12 @@ from pyspark.sql.functions import (
     broadcast,
 )
 
-# ── Project imports ──────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config.settings import (
     SILVER_OUTPUT, SPARK_DRIVER_MEMORY, SPARK_SHUFFLE_PARTITIONS,
     META_COLS, HR_FILL_WINDOW,
 )
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [SILVER-PREP] %(message)s",
@@ -90,7 +58,6 @@ CLEAN_INTERMEDIATE = SILVER_OUTPUT.replace(
     "pamap2_clean.parquet", "pamap2_cleaned_intermediate.parquet"
 )
 
-# Columns excluded from normalisation
 EXCLUDE_FROM_NORM = {"timestamp", "activity_id", "subject_id", "session_type"}
 
 
@@ -101,7 +68,6 @@ def run():
     log.info("SILVER LAYER — Preprocessing")
     log.info("=" * 60)
 
-    # ── 1. Initialise Spark session ──────────────────────────
     spark = (
         SparkSession.builder
         .appName("PAMAP2_Silver_Preprocessing")
@@ -114,11 +80,8 @@ def run():
     spark.sparkContext.setLogLevel("WARN")
     log.info(f"Spark version: {spark.version}")
 
-    # ── 2. Load cleaned intermediate data ────────────────────
-    # If the intermediate parquet (produced by silver/cleaning.py) is missing
-    # but the final Silver output already exists, verify it and exit early.
-    # This handles the case where the pipeline was previously completed and
-    # the intermediate artifact was not retained.
+    # If the intermediate parquet is missing but the final Silver output exists,
+    # verify it and exit early without re-running the full pipeline.
     if not os.path.exists(CLEAN_INTERMEDIATE):
         if os.path.exists(SILVER_OUTPUT):
             log.warning(
@@ -148,22 +111,9 @@ def run():
     df_clean = spark.read.parquet(CLEAN_INTERMEDIATE)
     log.info(f"Loaded {df_clean.count():,} rows x {len(df_clean.columns)} columns")
 
-    # ── 3. Heart-rate interpolation ──────────────────────────
-    # HR is sampled at ~9 Hz vs 100 Hz for IMUs, so ~91% of rows
-    # have null HR by design. The gap between consecutive HR
-    # readings is ~11 rows.
-    #
-    # Strategy (all using distributed Spark Window functions):
-    #   Step 1: Forward-fill with a BOUNDED window of 15 rows
-    #           (covers the ~11-row gap with margin).
-    #   Step 2: Back-fill leading nulls with the same bound.
-    #   Step 3: Fill any remaining nulls with per-subject mean HR.
-    #
-    # Why bounded windows:
-    #   Unbounded windows require a full partition sort and scan,
-    #   which is O(n) per partition. Bounded windows (15 rows)
-    #   limit the scan to a fixed neighbourhood, making the
-    #   operation O(1) per row after the initial sort.
+    # HR gap between consecutive readings is ~11 rows at 100 Hz / 9 Hz.
+    # HR_FILL_WINDOW=15 covers that gap with margin.
+    # Bounded windows (vs unbounded) avoid a full-partition sort scan.
     log.info(f"Interpolating heart rate (fill window = {HR_FILL_WINDOW} rows)")
 
     win_fwd = (
@@ -179,29 +129,18 @@ def run():
         .rowsBetween(0, HR_FILL_WINDOW)
     )
 
-    # Step 1: forward-fill (carry last known HR value forward)
     df_clean = df_clean.withColumn(
         "heart_rate",
         last("heart_rate", ignorenulls=True).over(win_fwd)
     )
 
-    # Step 2: back-fill (cover leading nulls with next known HR)
     df_clean = df_clean.withColumn(
         "heart_rate",
         first("heart_rate", ignorenulls=True).over(win_bwd)
     )
 
-    # Step 3: fill remaining nulls with per-subject mean HR via broadcast join.
-    #
-    # Design rationale: the lookup table contains exactly one row per subject
-    # (9 rows × 2 columns), making it far too small to justify a shuffle-based
-    # join.  Using broadcast() sends the tiny table to every executor once,
-    # eliminating the exchange stage entirely.  A Window-based mean would also
-    # work but triggers a partition-wide sort; the broadcast join achieves the
-    # same result with lower overhead.
-    #
-    # broadcast() annotation: small lookup table (9 rows × 2 cols) —
-    # broadcast eliminates shuffle.
+    # Per-subject mean fallback via broadcast join (9 rows × 2 cols — too small
+    # to justify a shuffle; broadcast() eliminates the exchange stage entirely).
     hr_means = (
         df_clean
         .groupBy("subject_id")
@@ -222,20 +161,6 @@ def run():
     log.info(f"Heart rate nulls remaining: {remaining_hr_nulls}")
     assert remaining_hr_nulls == 0, f"HR interpolation incomplete: {remaining_hr_nulls} nulls"
 
-    # ── 4. Min-Max normalisation (0–1) ───────────────────────
-    # All numeric sensor columns are scaled to [0, 1] using
-    # global min/max values. This ensures features are on the
-    # same scale for downstream ML models.
-    #
-    # Formula: x_norm = (x - x_min) / (x_max - x_min)
-    # If max == min (constant column), result is 0.
-    #
-    # IMPORTANT: spark_min / spark_max propagate NaN (unlike null).
-    # We filter NaN before computing stats using when(~isnan()).
-    #
-    # The entire normalisation is expressed as a single select()
-    # of column expressions. Catalyst fuses this into one physical
-    # projection stage — all 40 columns are normalised in one pass.
     sensor_cols = [
         c for c in df_clean.columns
         if c not in EXCLUDE_FROM_NORM
@@ -243,8 +168,8 @@ def run():
     ]
     log.info(f"Normalising {len(sensor_cols)} sensor columns to [0, 1]")
 
-    # Compute global min/max in ONE distributed aggregation pass
-    # NaN is converted to null so it is skipped by min/max
+    # spark_min/spark_max propagate NaN (unlike null), so convert NaN to null
+    # before computing stats. All 40 columns are normalised in one select() pass.
     agg_exprs = []
     for c in sensor_cols:
         safe_col = when(~isnan(col(c)), col(c))
@@ -253,7 +178,6 @@ def run():
 
     stats_row = df_clean.agg(*agg_exprs).first()
 
-    # Apply normalisation column by column
     df_normalised = df_clean
     for c in sensor_cols:
         c_min = stats_row[f"{c}__min"]
@@ -264,15 +188,13 @@ def run():
                 (col(c) - lit(c_min)) / lit(c_max - c_min),
             )
         else:
-            # Constant or all-null column -> set to 0
+            # Constant or all-null column
             df_normalised = df_normalised.withColumn(c, lit(0.0))
 
-    # Sanity check
     log.info("Post-normalisation stats (sample columns):")
     check_cols = ["heart_rate", "hand_acc_16g_x", "chest_gyro_x", "ankle_mag_z"]
     df_normalised.select(check_cols).summary("min", "max", "count").show()
 
-    # ── 5. Save final Silver output ──────────────────────────
     log.info(f"Writing Silver parquet to: {SILVER_OUTPUT}")
     os.makedirs(os.path.dirname(SILVER_OUTPUT), exist_ok=True)
 
@@ -285,7 +207,6 @@ def run():
         .parquet(SILVER_OUTPUT)
     )
 
-    # ── 6. Verify ────────────────────────────────────────────
     df_verify = spark.read.parquet(SILVER_OUTPUT)
     log.info(f"Verification:")
     log.info(f"  Rows    : {df_verify.count():,}")
